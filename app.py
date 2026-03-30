@@ -4,8 +4,7 @@ Streamlit App — Prédiction du Genre des Films avec Naive Bayes
 Interface graphique interactive pour explorer le dataset, prédire le genre
 d'un film et analyser les performances du modèle.
 
-Modèle : ComplementNB avec 82 features (multi-hot encoding)
-Accuracy : ~70%
+Le modèle affiché est chargé dynamiquement depuis `model_artifacts.pkl`.
 
 Lancer avec : streamlit run app.py
 """
@@ -18,6 +17,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import ast
 import json
+import os
 
 # ── Configuration de la page ──────────────────────────────────────────────────
 st.set_page_config(
@@ -29,7 +29,7 @@ st.set_page_config(
 
 # ── Chargement des artefacts ──────────────────────────────────────────────────
 @st.cache_resource
-def load_artifacts():
+def load_artifacts(artifacts_mtime: float):
     """Charge le modèle entraîné et les métadonnées."""
     return joblib.load("model_artifacts.pkl")
 
@@ -51,11 +51,41 @@ def load_dataset():
             return None
 
     df["first_genre"] = df["genre"].apply(extract_first_genre)
+    allowed_genres = ["Drama", "Comedy", "Action", "Horror"]
+    df = df[df["first_genre"].isin(allowed_genres)].copy()
     return df
 
 
+def make_unique_labels(labels):
+    """Rend les labels uniques pour l'affichage (ex: has_collection, has_collection_2)."""
+    counts = {}
+    unique = []
+    for label in labels:
+        if label not in counts:
+            counts[label] = 1
+            unique.append(label)
+        else:
+            counts[label] += 1
+            unique.append(f"{label}_{counts[label]}")
+    return unique
+
+
+def build_correlation_pairs(corr_df: pd.DataFrame) -> pd.DataFrame:
+    """Construit la liste des paires de features avec leur corrélation."""
+    values = corr_df.values
+    row_idx, col_idx = np.triu_indices_from(values, k=1)
+    pairs = pd.DataFrame({
+        "Feature A": corr_df.index[row_idx],
+        "Feature B": corr_df.columns[col_idx],
+        "Correlation": values[row_idx, col_idx],
+    })
+    pairs["AbsCorrelation"] = pairs["Correlation"].abs()
+    return pairs.sort_values("AbsCorrelation", ascending=False)
+
+
 try:
-    artifacts = load_artifacts()
+    artifacts_mtime = os.path.getmtime("model_artifacts.pkl")
+    artifacts = load_artifacts(artifacts_mtime)
     best_model = artifacts["best_model"]
     best_model_name = artifacts["best_model_name"]
     best_scaler = artifacts["best_scaler"]
@@ -78,6 +108,8 @@ try:
     all_model_metrics = artifacts["all_model_metrics"]
     classification_reports = artifacts["classification_reports"]
     confusion_mats = artifacts["confusion_matrices"]
+    feature_corr = np.array(artifacts.get("feature_correlation", []))
+    feature_corr_cols = artifacts.get("feature_correlation_columns", [])
     y_test_saved = np.array(artifacts["y_test"])
     y_preds = {k: np.array(v) for k, v in artifacts["y_preds"].items()}
     test_size = artifacts["test_size"]
@@ -167,18 +199,90 @@ if page == "🔍 Exploration des données":
     )
     st.plotly_chart(fig_hist, use_container_width=True)
 
-    # Corrélations
-    st.subheader("Matrice de corrélation")
-    numeric_cols = ["budget", "popularity", "revenue", "runtime", "vote_average", "vote_count", "year"]
-    corr = df_raw[numeric_cols].corr()
-    fig_corr = px.imshow(
-        corr,
-        text_auto=".2f",
-        color_continuous_scale="RdBu_r",
-        title="Corrélations entre features numériques",
-        aspect="auto",
-    )
-    st.plotly_chart(fig_corr, use_container_width=True)
+    # Corrélations lisibles entre features pertinentes
+    st.subheader("Corrélations entre features pertinentes")
+    if feature_corr.size > 0 and len(feature_corr_cols) > 0:
+        display_cols = make_unique_labels(feature_corr_cols)
+        corr_df = pd.DataFrame(feature_corr, index=display_cols, columns=display_cols)
+
+        # 1) Heatmap focus: top features les plus corrélées en moyenne
+        abs_corr = corr_df.abs().copy()
+        np.fill_diagonal(abs_corr.values, 0.0)
+        relevance = abs_corr.mean(axis=1).sort_values(ascending=False)
+
+        top_k = st.slider(
+            "Nombre de features à afficher dans la heatmap focus",
+            min_value=8,
+            max_value=min(35, len(corr_df)),
+            value=min(18, len(corr_df)),
+            step=1,
+        )
+        top_features = relevance.head(top_k).index.tolist()
+        focused_corr = corr_df.loc[top_features, top_features]
+
+        fig_corr_focus = px.imshow(
+            focused_corr,
+            color_continuous_scale="RdBu_r",
+            zmin=-1,
+            zmax=1,
+            title=f"Heatmap focus ({top_k} features les plus pertinentes)",
+            aspect="auto",
+            text_auto=".2f",
+        )
+        fig_corr_focus.update_layout(height=max(500, 24 * top_k))
+        st.plotly_chart(fig_corr_focus, use_container_width=True)
+
+        # 2) Tableau des paires les plus corrélées
+        corr_pairs = build_correlation_pairs(corr_df)
+        threshold = st.slider(
+            "Seuil |corrélation| pour afficher les paires",
+            min_value=0.10,
+            max_value=0.95,
+            value=0.50,
+            step=0.05,
+        )
+        filtered_pairs = corr_pairs[corr_pairs["AbsCorrelation"] >= threshold].copy()
+
+        st.markdown(
+            f"**{len(filtered_pairs)} paires** avec |corr| >= **{threshold:.2f}** "
+            f"(sur {len(corr_pairs)} paires au total)."
+        )
+        st.dataframe(
+            filtered_pairs.head(40).style.format({
+                "Correlation": "{:.3f}",
+                "AbsCorrelation": "{:.3f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # 3) Top corrélations positives / négatives
+        top_pos = corr_pairs.sort_values("Correlation", ascending=False).head(10).copy()
+        top_neg = corr_pairs.sort_values("Correlation", ascending=True).head(10).copy()
+        top_pos["Pair"] = top_pos["Feature A"] + " ↔ " + top_pos["Feature B"]
+        top_neg["Pair"] = top_neg["Feature A"] + " ↔ " + top_neg["Feature B"]
+
+        col_pos, col_neg = st.columns(2)
+        with col_pos:
+            fig_pos = px.bar(
+                top_pos.sort_values("Correlation"),
+                x="Correlation",
+                y="Pair",
+                orientation="h",
+                title="Top corrélations positives",
+            )
+            st.plotly_chart(fig_pos, use_container_width=True)
+        with col_neg:
+            fig_neg = px.bar(
+                top_neg.sort_values("Correlation"),
+                x="Correlation",
+                y="Pair",
+                orientation="h",
+                title="Top corrélations négatives",
+            )
+            st.plotly_chart(fig_neg, use_container_width=True)
+    else:
+        st.warning("Corrélations indisponibles. Réexécutez le notebook pour regénérer les artefacts.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -200,7 +304,7 @@ elif page == "🎯 Prédiction":
     )
 
     # Formulaire de saisie
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("#### 📊 Métriques")
@@ -221,17 +325,6 @@ elif page == "🎯 Prédiction":
         day_of_week = st.selectbox("Jour de sortie", day_options)
         has_homepage = st.selectbox("Page web officielle", list(le_homepage.classes_))
         has_collection = st.checkbox("Fait partie d'une saga", value=False)
-
-    with col3:
-        st.markdown("#### 🎭 Genres secondaires du film")
-        st.caption("Cochez les genres qui décrivent le film (en plus du genre principal qu'on cherche à prédire).")
-        selected_genres = []
-        # Show in 2 sub-columns
-        g_col1, g_col2 = st.columns(2)
-        for i, genre in enumerate(top_genres):
-            target_col = g_col1 if i < len(top_genres) // 2 else g_col2
-            if target_col.checkbox(genre, key=f"genre_{genre}"):
-                selected_genres.append(genre)
 
     st.markdown("---")
 
@@ -271,10 +364,9 @@ elif page == "🎯 Prédiction":
         feature_values["homepage_enc"] = le_homepage.transform([has_homepage])[0]
         feature_values["has_collection"] = int(has_collection)
 
-        # Genre multi-hot
+        # Genre multi-hot (désactivé dans l'UI : tous les genres secondaires à 0)
         for gf in genre_features:
-            genre_name = gf.replace("has_", "")
-            feature_values[gf] = 1 if genre_name in selected_genres else 0
+            feature_values[gf] = 0
 
         # Company multi-hot
         for i, cf in enumerate(company_features):
@@ -322,6 +414,104 @@ elif page == "🎯 Prédiction":
         for _, row in top5.iterrows():
             pct = row["Probabilité"] * 100
             st.write(f"- **{row['Genre']}** : {pct:.2f}%")
+
+        # Pondération / contribution des features au score du genre prédit
+        st.markdown("### Pondération des features dans le calcul du modèle")
+        if hasattr(best_model, "feature_log_prob_") and hasattr(best_model, "class_log_prior_"):
+            x_scaled = X_input_scaled[0]
+            class_idx = int(prediction)
+            class_name = le.classes_[class_idx]
+            weights = best_model.feature_log_prob_[class_idx]
+            contributions = x_scaled * weights
+
+            contrib_df = pd.DataFrame({
+                "Feature": ALL_FEATURES,
+                "Valeur (après scaling)": x_scaled,
+                "Poids log P(feature|classe)": weights,
+                "Contribution au score": contributions,
+            })
+            contrib_df["AbsContribution"] = contrib_df["Contribution au score"].abs()
+            contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
+
+            st.caption(
+                f"Classe analysée : {class_name}. "
+                "Contribution = valeur_feature_scaled × log P(feature|classe)."
+            )
+            st.dataframe(
+                contrib_df[["Feature", "Valeur (après scaling)", "Poids log P(feature|classe)", "Contribution au score"]]
+                .head(20)
+                .style.format({
+                    "Valeur (après scaling)": "{:.4f}",
+                    "Poids log P(feature|classe)": "{:.4f}",
+                    "Contribution au score": "{:.4f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            fig_contrib = px.bar(
+                contrib_df.head(20).sort_values("Contribution au score"),
+                x="Contribution au score",
+                y="Feature",
+                orientation="h",
+                title="Top 20 contributions de features (classe prédite)",
+                color="Contribution au score",
+                color_continuous_scale="RdBu_r",
+            )
+            st.plotly_chart(fig_contrib, use_container_width=True)
+        elif hasattr(best_model, "theta_") and hasattr(best_model, "var_"):
+            x_scaled = X_input_scaled[0]
+            class_idx = int(prediction)
+            class_name = le.classes_[class_idx]
+            mu = best_model.theta_[class_idx]
+            var = np.maximum(best_model.var_[class_idx], 1e-12)
+            contributions = -0.5 * np.log(2 * np.pi * var) - ((x_scaled - mu) ** 2) / (2 * var)
+
+            contrib_df = pd.DataFrame({
+                "Feature": ALL_FEATURES,
+                "Valeur (après scaling)": x_scaled,
+                "Moyenne classe (theta)": mu,
+                "Variance classe": var,
+                "Contribution log-vraisemblance": contributions,
+            })
+            contrib_df["AbsContribution"] = contrib_df["Contribution log-vraisemblance"].abs()
+            contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
+
+            st.caption(
+                f"Classe analysée : {class_name}. "
+                "Contribution = terme log-vraisemblance Gaussienne par feature."
+            )
+            st.dataframe(
+                contrib_df[[
+                    "Feature",
+                    "Valeur (après scaling)",
+                    "Moyenne classe (theta)",
+                    "Variance classe",
+                    "Contribution log-vraisemblance",
+                ]]
+                .head(20)
+                .style.format({
+                    "Valeur (après scaling)": "{:.4f}",
+                    "Moyenne classe (theta)": "{:.4f}",
+                    "Variance classe": "{:.4f}",
+                    "Contribution log-vraisemblance": "{:.4f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            fig_contrib = px.bar(
+                contrib_df.head(20).sort_values("Contribution log-vraisemblance"),
+                x="Contribution log-vraisemblance",
+                y="Feature",
+                orientation="h",
+                title="Top 20 contributions de features (classe prédite)",
+                color="Contribution log-vraisemblance",
+                color_continuous_scale="RdBu_r",
+            )
+            st.plotly_chart(fig_contrib, use_container_width=True)
+        else:
+            st.info("Le modèle courant n'expose pas de pondérations de features interprétables.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -420,13 +610,17 @@ elif page == "📊 Analyse du modèle":
 
     st.markdown("---")
 
+    # Liste des modèles (meilleur modèle par défaut)
+    _model_options = list(classification_reports.keys())
+    _default_model_index = _model_options.index(best_model_name) if best_model_name in _model_options else 0
+
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 2 : Classification report par genre
     # ══════════════════════════════════════════════════════════════════════════
     st.header("2. Performance par genre")
 
     selected_report_model = st.selectbox(
-        "Modèle :", list(classification_reports.keys()), key="report_model",
+        "Modèle :", _model_options, index=_default_model_index, key="report_model",
     )
     report = classification_reports[selected_report_model]
 
@@ -442,17 +636,6 @@ elif page == "📊 Analyse du modèle":
                 "Support": int(r["support"]),
             })
 
-    # Ajouter les moyennes
-    for avg_key in ["macro avg", "weighted avg"]:
-        if avg_key in report:
-            r = report[avg_key]
-            report_rows.append({
-                "Genre": avg_key.upper(),
-                "Precision": r["precision"],
-                "Recall": r["recall"],
-                "F1-Score": r["f1-score"],
-                "Support": int(r["support"]),
-            })
     report_df = pd.DataFrame(report_rows)
 
     st.dataframe(
@@ -466,13 +649,10 @@ elif page == "📊 Analyse du modèle":
         hide_index=True,
     )
 
-    # Graphique par genre (sans les moyennes)
-    report_df_genres = report_df[~report_df["Genre"].str.contains("AVG|MACRO|WEIGHTED", case=False, na=False)]
-
     fig_genre_perf = go.Figure()
-    fig_genre_perf.add_trace(go.Bar(name="Precision", x=report_df_genres["Genre"], y=report_df_genres["Precision"]))
-    fig_genre_perf.add_trace(go.Bar(name="Recall", x=report_df_genres["Genre"], y=report_df_genres["Recall"]))
-    fig_genre_perf.add_trace(go.Bar(name="F1-Score", x=report_df_genres["Genre"], y=report_df_genres["F1-Score"]))
+    fig_genre_perf.add_trace(go.Bar(name="Precision", x=report_df["Genre"], y=report_df["Precision"]))
+    fig_genre_perf.add_trace(go.Bar(name="Recall", x=report_df["Genre"], y=report_df["Recall"]))
+    fig_genre_perf.add_trace(go.Bar(name="F1-Score", x=report_df["Genre"], y=report_df["F1-Score"]))
     fig_genre_perf.update_layout(
         barmode="group",
         title=f"Precision / Recall / F1 par genre — {selected_report_model}",
@@ -489,8 +669,11 @@ elif page == "📊 Analyse du modèle":
     # ══════════════════════════════════════════════════════════════════════════
     st.header("3. Matrices de confusion")
 
+    _cm_options = list(confusion_mats.keys())
     selected_cm_model = st.selectbox(
-        "Modèle :", list(confusion_mats.keys()), key="cm_model",
+        "Modèle :", _cm_options,
+        index=_cm_options.index(best_model_name) if best_model_name in _cm_options else 0,
+        key="cm_model",
     )
     cm = np.array(confusion_mats[selected_cm_model])
     cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
@@ -530,8 +713,11 @@ elif page == "📊 Analyse du modèle":
     # ══════════════════════════════════════════════════════════════════════════
     st.header("4. Distribution réelle vs prédite")
 
+    _dist_options = list(y_preds.keys())
     selected_dist_model = st.selectbox(
-        "Modèle :", list(y_preds.keys()), key="dist_model",
+        "Modèle :", _dist_options,
+        index=_dist_options.index(best_model_name) if best_model_name in _dist_options else 0,
+        key="dist_model",
     )
     y_pred_sel = y_preds[selected_dist_model]
 
