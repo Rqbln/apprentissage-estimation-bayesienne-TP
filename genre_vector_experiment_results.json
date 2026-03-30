@@ -1,0 +1,59 @@
+{
+  "baseline_metrics": {
+    "accuracy": 0.8812600969305331,
+    "f1_weighted": 0.8830562771473764,
+    "f1_macro": 0.873332587917213,
+    "precision_weighted": 0.894906642849287,
+    "precision_macro": 0.859467922575712,
+    "recall_weighted": 0.8812600969305331,
+    "recall_macro": 0.9043195433453506
+  },
+  "results": [
+    {
+      "scenario": "baseline_ui_zero_genres",
+      "model": "GaussianNB",
+      "metrics": {
+        "accuracy": 0.4458804523424879,
+        "f1_weighted": 0.4332914433410333,
+        "f1_macro": 0.40039405489262614,
+        "precision_weighted": 0.4650682375812038,
+        "recall_weighted": 0.4458804523424879
+      }
+    },
+    {
+      "scenario": "phase1_multihot_binary",
+      "model": "GaussianNB",
+      "metrics": {
+        "accuracy": 0.3691437802907916,
+        "f1_weighted": 0.37279008109332246,
+        "f1_macro": 0.3776148727629415,
+        "precision_weighted": 0.6169398415819927,
+        "recall_weighted": 0.3691437802907916
+      }
+    },
+    {
+      "scenario": "phase2_multihot_weighted",
+      "model": "GaussianNB",
+      "metrics": {
+        "accuracy": 0.42245557350565427,
+        "f1_weighted": 0.432414764820358,
+        "f1_macro": 0.43424352739571026,
+        "precision_weighted": 0.6448392929992284,
+        "recall_weighted": 0.42245557350565427
+      }
+    },
+    {
+      "scenario": "phase2_multihot_weighted",
+      "model": "LogisticRegression(multinomial)",
+      "metrics": {
+        "accuracy": 0.7302100161550888,
+        "f1_weighted": 0.7273974483723286,
+        "f1_macro": 0.7020953114555591,
+        "precision_weighted": 0.7306551454393275,
+        "recall_weighted": 0.7302100161550888
+      }
+    }
+  ],
+  "gate_min_gain": 0.005,
+  "phase3_decision": "Le gain du vecteur pondéré est suffisant: priorité à la stabilisation Phase 2. La phase embeddings reste désactivée pour l'instant."
+}

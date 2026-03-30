@@ -1,10 +1,10 @@
 """
-Streamlit App — Prédiction du Genre des Films avec Naive Bayes
-==============================================================
+Streamlit App — Prédiction du Genre des Films
+============================================
 Interface graphique interactive pour explorer le dataset, prédire le genre
 d'un film et analyser les performances du modèle.
 
-Le modèle affiché est chargé dynamiquement depuis `model_artifacts.pkl`.
+Le modèle affiché est chargé dynamiquement depuis un artefact .pkl.
 
 Lancer avec : streamlit run app.py
 """
@@ -21,17 +21,25 @@ import os
 
 # ── Configuration de la page ──────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Prédiction Genre Films — Naive Bayes",
+    page_title="Prédiction Genre Films",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ── Chargement des artefacts ──────────────────────────────────────────────────
+DEFAULT_ARTIFACT_PATH = (
+    "model_artifacts_over88.pkl"
+    if os.path.exists("model_artifacts_over88.pkl")
+    else "model_artifacts.pkl"
+)
+ARTIFACT_PATH = os.getenv("MODEL_ARTIFACT_PATH", DEFAULT_ARTIFACT_PATH)
+
+
 @st.cache_resource
-def load_artifacts(artifacts_mtime: float):
+def load_artifacts(artifact_path: str, artifacts_mtime: float):
     """Charge le modèle entraîné et les métadonnées."""
-    return joblib.load("model_artifacts.pkl")
+    return joblib.load(artifact_path)
 
 
 @st.cache_data
@@ -84,16 +92,19 @@ def build_correlation_pairs(corr_df: pd.DataFrame) -> pd.DataFrame:
 
 
 try:
-    artifacts_mtime = os.path.getmtime("model_artifacts.pkl")
-    artifacts = load_artifacts(artifacts_mtime)
+    artifacts_mtime = os.path.getmtime(ARTIFACT_PATH)
+    artifacts = load_artifacts(ARTIFACT_PATH, artifacts_mtime)
     best_model = artifacts["best_model"]
     best_model_name = artifacts["best_model_name"]
-    best_scaler = artifacts["best_scaler"]
+    best_scaler = artifacts.get("best_scaler")
     le = artifacts["label_encoder"]
     ALL_FEATURES = artifacts["all_features"]
     numeric_features = artifacts["numeric_features"]
     encoded_features = artifacts["encoded_features"]
     genre_features = artifacts["genre_features"]
+    # Certaines anciennes versions d'artefacts incluent has_collection dans genre_features.
+    # On l'exclut ici pour éviter d'écraser la vraie feature has_collection saisie par l'utilisateur.
+    genre_feature_columns = [gf for gf in genre_features if gf != "has_collection"]
     company_features = artifacts["company_features"]
     country_features = artifacts["country_features"]
     le_lang = artifacts["le_lang"]
@@ -121,7 +132,10 @@ try:
 except Exception as e:
     MODEL_LOADED = False
     st.error(f"Erreur de chargement du modèle : {e}")
-    st.info("Exécutez d'abord le notebook pour générer `model_artifacts.pkl`.")
+    st.info(
+        "Générez un artefact modèle puis relancez l'app "
+        "(par défaut `model_artifacts_over88.pkl`, sinon `model_artifacts.pkl`)."
+    )
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🎬 Navigation")
@@ -139,6 +153,7 @@ Apprentissage & Estimation Bayésienne
 *Prédiction du genre des films IMDb*  
 
 **Modèle** : {best_model_name}  
+**Artefact** : `{ARTIFACT_PATH}`  
 **Features** : {n_features}  
 **Accuracy** : {all_model_metrics[best_model_name]['accuracy']:.1%}
 """
@@ -328,7 +343,39 @@ elif page == "🎯 Prédiction":
 
     st.markdown("---")
 
-    # Section pour companies et countries (en expanders pour ne pas surcharger)
+    # Section pour genres, companies et countries (en expanders pour ne pas surcharger)
+    with st.expander("🎭 Genres associés (optionnel)"):
+        st.caption(
+            "Ces genres sont utilisés comme vecteur d'information complémentaire "
+            "(mode binaire ou pondéré)."
+        )
+        genre_vector_mode = st.radio(
+            "Mode d'encodage des genres :",
+            options=["Binaire (multi-hot)", "Pondéré"],
+            horizontal=True,
+        )
+        selected_genres = st.multiselect(
+            "Sélectionnez les genres associés connus :",
+            options=top_genres,
+            default=[],
+        )
+        genre_weights = {}
+        if genre_vector_mode == "Pondéré" and selected_genres:
+            st.caption("Ajustez le poids de chaque genre (0 = ignoré, 1 = maximum).")
+            default_weights = [1.0, 0.6, 0.3]
+            for idx, genre_name in enumerate(selected_genres):
+                default_weight = default_weights[idx] if idx < len(default_weights) else 0.2
+                genre_weights[genre_name] = st.slider(
+                    f"Poids — {genre_name}",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=float(default_weight),
+                    step=0.05,
+                    key=f"weight_{genre_name}",
+                )
+        elif selected_genres:
+            genre_weights = {genre_name: 1.0 for genre_name in selected_genres}
+
     with st.expander("🏢 Compagnies de production (optionnel)"):
         selected_companies = st.multiselect(
             "Sélectionnez les compagnies de production :",
@@ -364,9 +411,16 @@ elif page == "🎯 Prédiction":
         feature_values["homepage_enc"] = le_homepage.transform([has_homepage])[0]
         feature_values["has_collection"] = int(has_collection)
 
-        # Genre multi-hot (désactivé dans l'UI : tous les genres secondaires à 0)
-        for gf in genre_features:
-            feature_values[gf] = 0
+        # Genres associés (multi-hot binaire ou pondéré)
+        for gf in genre_feature_columns:
+            genre_name = gf.removeprefix("has_")
+            if genre_name in selected_genres:
+                if genre_vector_mode == "Pondéré":
+                    feature_values[gf] = float(genre_weights.get(genre_name, 0.0))
+                else:
+                    feature_values[gf] = 1.0
+            else:
+                feature_values[gf] = 0.0
 
         # Company multi-hot
         for i, cf in enumerate(company_features):
@@ -379,12 +433,15 @@ elif page == "🎯 Prédiction":
         # DataFrame
         X_input = pd.DataFrame([feature_values])[ALL_FEATURES].values.astype(np.float64)
 
-        # Scaling
-        X_input_scaled = best_scaler.transform(X_input)
+        # Transformation pour le modèle courant:
+        # - Naive Bayes: conserve le scaling
+        # - autres modèles (ex. RandomForest): pas de scaling
+        uses_nb_math = hasattr(best_model, "feature_log_prob_") or hasattr(best_model, "theta_")
+        X_model_input = best_scaler.transform(X_input) if (uses_nb_math and best_scaler is not None) else X_input
 
         # Prédiction
-        prediction = best_model.predict(X_input_scaled)[0]
-        probabilities = best_model.predict_proba(X_input_scaled)[0]
+        prediction = best_model.predict(X_model_input)[0]
+        probabilities = best_model.predict_proba(X_model_input)[0]
         predicted_genre = le.classes_[prediction]
 
         # Affichage
@@ -418,7 +475,7 @@ elif page == "🎯 Prédiction":
         # Pondération / contribution des features au score du genre prédit
         st.markdown("### Pondération des features dans le calcul du modèle")
         if hasattr(best_model, "feature_log_prob_") and hasattr(best_model, "class_log_prior_"):
-            x_scaled = X_input_scaled[0]
+            x_scaled = X_model_input[0]
             class_idx = int(prediction)
             class_name = le.classes_[class_idx]
             weights = best_model.feature_log_prob_[class_idx]
@@ -460,7 +517,7 @@ elif page == "🎯 Prédiction":
             )
             st.plotly_chart(fig_contrib, use_container_width=True)
         elif hasattr(best_model, "theta_") and hasattr(best_model, "var_"):
-            x_scaled = X_input_scaled[0]
+            x_scaled = X_model_input[0]
             class_idx = int(prediction)
             class_name = le.classes_[class_idx]
             mu = best_model.theta_[class_idx]
@@ -562,7 +619,7 @@ elif page == "📊 Analyse du modèle":
     st.markdown("")
 
     # Tableau comparatif
-    st.subheader("Comparaison des variantes Naive Bayes")
+    st.subheader("Comparaison des modèles disponibles")
     comp_rows = []
     for model_name, metrics in all_model_metrics.items():
         comp_rows.append({
@@ -602,7 +659,7 @@ elif page == "📊 Analyse du modèle":
             y="Score",
             color="Métrique",
             barmode="group",
-            title="Comparaison des variantes Naive Bayes",
+            title="Comparaison des modèles disponibles",
             text_auto=".3f",
         )
         fig_comp.update_layout(yaxis_range=[0, 1], height=500)
