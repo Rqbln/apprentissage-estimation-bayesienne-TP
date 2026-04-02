@@ -91,6 +91,21 @@ def build_correlation_pairs(corr_df: pd.DataFrame) -> pd.DataFrame:
     return pairs.sort_values("AbsCorrelation", ascending=False)
 
 
+def parse_list_column(value):
+    """Parse une colonne stockée en liste sérialisée dans le CSV."""
+    if value in ("not available", "[]") or pd.isna(value):
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        parsed = ast.literal_eval(value)
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+    except Exception:
+        pass
+    return []
+
+
 try:
     artifacts_mtime = os.path.getmtime(ARTIFACT_PATH)
     artifacts = load_artifacts(ARTIFACT_PATH, artifacts_mtime)
@@ -164,140 +179,36 @@ Apprentissage & Estimation Bayésienne
 # PAGE 1 : Exploration des données
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "🔍 Exploration des données":
-    st.title("🔍 Exploration du Dataset IMDb")
+    st.title("🔍 Exploration des 4 genres")
 
     df_raw = load_dataset()
+    st.caption("Vue synthétique pour la présentation: Action, Comedy, Drama, Horror.")
 
-    st.markdown(f"**{len(df_raw):,} films** chargés depuis le dataset IMDb.")
-
-    # Métriques clés
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Films", f"{len(df_raw):,}")
-    col2.metric("Colonnes", df_raw.shape[1])
-    col3.metric("Genres distincts", df_raw["first_genre"].nunique())
-    col4.metric("Langues", df_raw["original_language"].nunique())
+    col2.metric("Genres", "4")
+    col3.metric("Note moyenne", f"{df_raw['vote_average'].mean():.2f}")
+    col4.metric("Durée médiane", f"{df_raw['runtime'].median():.0f} min")
 
-    st.markdown("---")
-
-    # Aperçu du dataset
-    with st.expander("📋 Aperçu du dataset (20 premières lignes)", expanded=False):
-        st.dataframe(df_raw.head(20), use_container_width=True)
-
-    # Distribution des genres
-    st.subheader("Distribution des genres")
     genre_counts = df_raw["first_genre"].value_counts().reset_index()
     genre_counts.columns = ["Genre", "Nombre"]
-
     fig_genre = px.bar(
         genre_counts,
         x="Genre",
         y="Nombre",
-        color="Nombre",
-        color_continuous_scale="Viridis",
-        title="Distribution des genres (premier genre de chaque film)",
+        color="Genre",
+        title="Répartition des films par genre",
     )
-    fig_genre.update_layout(xaxis_tickangle=-45)
     st.plotly_chart(fig_genre, use_container_width=True)
 
-    # Distributions des features numériques
-    st.subheader("Distributions des features numériques")
-    numeric_feat = st.selectbox(
-        "Choisir une feature :",
-        ["vote_average", "vote_count", "popularity", "runtime", "budget", "revenue", "year"],
+    fig_box = px.box(
+        df_raw,
+        x="first_genre",
+        y="vote_average",
+        color="first_genre",
+        title="Distribution des notes par genre",
     )
-    fig_hist = px.histogram(
-        df_raw[df_raw[numeric_feat] > 0] if numeric_feat in ["budget", "revenue"] else df_raw,
-        x=numeric_feat,
-        nbins=50,
-        title=f"Distribution de {numeric_feat}",
-        marginal="box",
-    )
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-    # Corrélations lisibles entre features pertinentes
-    st.subheader("Corrélations entre features pertinentes")
-    if feature_corr.size > 0 and len(feature_corr_cols) > 0:
-        display_cols = make_unique_labels(feature_corr_cols)
-        corr_df = pd.DataFrame(feature_corr, index=display_cols, columns=display_cols)
-
-        # 1) Heatmap focus: top features les plus corrélées en moyenne
-        abs_corr = corr_df.abs().copy()
-        np.fill_diagonal(abs_corr.values, 0.0)
-        relevance = abs_corr.mean(axis=1).sort_values(ascending=False)
-
-        top_k = st.slider(
-            "Nombre de features à afficher dans la heatmap focus",
-            min_value=8,
-            max_value=min(35, len(corr_df)),
-            value=min(18, len(corr_df)),
-            step=1,
-        )
-        top_features = relevance.head(top_k).index.tolist()
-        focused_corr = corr_df.loc[top_features, top_features]
-
-        fig_corr_focus = px.imshow(
-            focused_corr,
-            color_continuous_scale="RdBu_r",
-            zmin=-1,
-            zmax=1,
-            title=f"Heatmap focus ({top_k} features les plus pertinentes)",
-            aspect="auto",
-            text_auto=".2f",
-        )
-        fig_corr_focus.update_layout(height=max(500, 24 * top_k))
-        st.plotly_chart(fig_corr_focus, use_container_width=True)
-
-        # 2) Tableau des paires les plus corrélées
-        corr_pairs = build_correlation_pairs(corr_df)
-        threshold = st.slider(
-            "Seuil |corrélation| pour afficher les paires",
-            min_value=0.10,
-            max_value=0.95,
-            value=0.50,
-            step=0.05,
-        )
-        filtered_pairs = corr_pairs[corr_pairs["AbsCorrelation"] >= threshold].copy()
-
-        st.markdown(
-            f"**{len(filtered_pairs)} paires** avec |corr| >= **{threshold:.2f}** "
-            f"(sur {len(corr_pairs)} paires au total)."
-        )
-        st.dataframe(
-            filtered_pairs.head(40).style.format({
-                "Correlation": "{:.3f}",
-                "AbsCorrelation": "{:.3f}",
-            }),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # 3) Top corrélations positives / négatives
-        top_pos = corr_pairs.sort_values("Correlation", ascending=False).head(10).copy()
-        top_neg = corr_pairs.sort_values("Correlation", ascending=True).head(10).copy()
-        top_pos["Pair"] = top_pos["Feature A"] + " ↔ " + top_pos["Feature B"]
-        top_neg["Pair"] = top_neg["Feature A"] + " ↔ " + top_neg["Feature B"]
-
-        col_pos, col_neg = st.columns(2)
-        with col_pos:
-            fig_pos = px.bar(
-                top_pos.sort_values("Correlation"),
-                x="Correlation",
-                y="Pair",
-                orientation="h",
-                title="Top corrélations positives",
-            )
-            st.plotly_chart(fig_pos, use_container_width=True)
-        with col_neg:
-            fig_neg = px.bar(
-                top_neg.sort_values("Correlation"),
-                x="Correlation",
-                y="Pair",
-                orientation="h",
-                title="Top corrélations négatives",
-            )
-            st.plotly_chart(fig_neg, use_container_width=True)
-    else:
-        st.warning("Corrélations indisponibles. Réexécutez le notebook pour regénérer les artefacts.")
+    st.plotly_chart(fig_box, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -318,83 +229,193 @@ elif page == "🎯 Prédiction":
         "Renseignez les caractéristiques d'un film ci-dessous, puis cliquez sur **Prédire**."
     )
 
-    # Formulaire de saisie
-    col1, col2 = st.columns(2)
+    input_mode = st.radio(
+        "Mode de saisie :",
+        options=["Saisie manuelle", "Film du dataset"],
+        index=1,
+        horizontal=True,
+    )
+    dataset_mode = input_mode == "Film du dataset"
+    selected_movie_row = None
 
-    with col1:
-        st.markdown("#### 📊 Métriques")
-        vote_count = st.number_input("Nombre de votes", min_value=50, max_value=50000, value=500, step=50)
-        vote_average = st.slider("Note moyenne", 0.0, 10.0, 6.5, 0.1)
-        popularity = st.number_input("Score de popularité", min_value=0.0, max_value=500.0, value=15.0, step=1.0)
-        runtime = st.slider("Durée (minutes)", 10, 300, 100, 5)
-        year = st.slider("Année de sortie", 1950, 2025, 2020)
+    month_options = list(le_month.classes_)
+    season_options = list(le_season.classes_)
+    day_options = list(le_day.classes_)
+    homepage_options = list(le_homepage.classes_)
 
-    with col2:
-        st.markdown("#### 📅 Infos")
-        language = st.selectbox("Langue originale", top_languages + ["Other"])
-        month_options = list(le_month.classes_)
-        month = st.selectbox("Mois de sortie", month_options)
-        season_options = list(le_season.classes_)
-        season = st.selectbox("Saison", season_options)
-        day_options = list(le_day.classes_)
-        day_of_week = st.selectbox("Jour de sortie", day_options)
-        has_homepage = st.selectbox("Page web officielle", list(le_homepage.classes_))
-        has_collection = st.checkbox("Fait partie d'une saga", value=False)
+    vote_count_default = 500
+    vote_average_default = 6.5
+    popularity_default = 15.0
+    runtime_default = 100
+    year_default = 2020
+    language_default = top_languages[0] if top_languages else "Other"
+    month_default = month_options[0] if month_options else "Jan"
+    season_default = season_options[0] if season_options else "Q1"
+    day_default = day_options[0] if day_options else "Friday"
+    homepage_default = homepage_options[0] if homepage_options else "NO"
+    has_collection_default = False
+    selected_genres_default = []
+    selected_companies_default = []
+    selected_countries_default = []
 
-    st.markdown("---")
-
-    # Section pour genres, companies et countries (en expanders pour ne pas surcharger)
-    with st.expander("🎭 Genres associés (optionnel)"):
-        st.caption(
-            "Ces genres sont utilisés comme vecteur d'information complémentaire "
-            "(mode binaire ou pondéré)."
+    if dataset_mode:
+        df_pred = load_dataset().reset_index(drop=True)
+        movie_idx = st.selectbox(
+            "Choisissez un film du dataset :",
+            options=df_pred.index.tolist(),
+            format_func=lambda idx: (
+                f"{df_pred.at[idx, 'title']} ({int(df_pred.at[idx, 'year']) if pd.notna(df_pred.at[idx, 'year']) else 'N/A'})"
+                f" — genre réel: {df_pred.at[idx, 'first_genre']}"
+            ),
         )
-        genre_vector_mode = st.radio(
-            "Mode d'encodage des genres :",
-            options=["Binaire (multi-hot)", "Pondéré"],
-            horizontal=True,
-        )
-        selected_genres = st.multiselect(
-            "Sélectionnez les genres associés connus :",
-            options=top_genres,
-            default=[],
-        )
-        genre_weights = {}
-        if genre_vector_mode == "Pondéré" and selected_genres:
-            st.caption("Ajustez le poids de chaque genre (0 = ignoré, 1 = maximum).")
-            default_weights = [1.0, 0.6, 0.3]
-            for idx, genre_name in enumerate(selected_genres):
-                default_weight = default_weights[idx] if idx < len(default_weights) else 0.2
-                genre_weights[genre_name] = st.slider(
-                    f"Poids — {genre_name}",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=float(default_weight),
-                    step=0.05,
-                    key=f"weight_{genre_name}",
-                )
-        elif selected_genres:
-            genre_weights = {genre_name: 1.0 for genre_name in selected_genres}
+        selected_movie_row = df_pred.loc[movie_idx]
+        st.caption("Les champs ci-dessous sont préremplis automatiquement à partir du film sélectionné.")
 
-    with st.expander("🏢 Compagnies de production (optionnel)"):
-        selected_companies = st.multiselect(
-            "Sélectionnez les compagnies de production :",
-            options=top_companies,
-            default=[],
-        )
+        vote_count_default = int(max(50, float(selected_movie_row.get("vote_count", 500) or 500)))
+        vote_average_default = float(np.clip(float(selected_movie_row.get("vote_average", 6.5) or 6.5), 0.0, 10.0))
+        popularity_default = float(max(0.0, float(selected_movie_row.get("popularity", 15.0) or 15.0)))
+        runtime_default = int(np.clip(float(selected_movie_row.get("runtime", 100) or 100), 10, 300))
+        year_default = int(np.clip(float(selected_movie_row.get("year", 2020) or 2020), 1950, 2025))
 
-    with st.expander("🌍 Pays de production (optionnel)"):
-        selected_countries = st.multiselect(
-            "Sélectionnez les pays de production :",
-            options=top_countries,
-            default=[],
+        raw_language = str(selected_movie_row.get("original_language", "Other"))
+        language_default = raw_language if raw_language in (top_languages + ["Other"]) else "Other"
+
+        raw_month = str(selected_movie_row.get("month", month_default))
+        month_default = raw_month if raw_month in month_options else month_default
+        raw_season = str(selected_movie_row.get("season", season_default))
+        season_default = raw_season if raw_season in season_options else season_default
+        raw_day = str(selected_movie_row.get("day_of_week", day_default))
+        day_default = raw_day if raw_day in day_options else day_default
+
+        raw_homepage = str(selected_movie_row.get("has_homepage", homepage_default))
+        homepage_default = raw_homepage if raw_homepage in homepage_options else homepage_default
+        has_collection_default = str(selected_movie_row.get("belongs_to_collection", "not available")) not in [
+            "not available", "", "[]",
+        ]
+
+        selected_genres_default = [g for g in parse_list_column(selected_movie_row.get("genre")) if g in top_genres]
+        selected_companies_default = [
+            c for c in parse_list_column(selected_movie_row.get("companies")) if c in top_companies
+        ]
+        selected_countries_default = [
+            c for c in parse_list_column(selected_movie_row.get("countries")) if c in top_countries
+        ]
+
+    if dataset_mode:
+        # Mode direct: aucune saisie manuelle, on prend exactement les valeurs du film sélectionné.
+        vote_count = vote_count_default
+        vote_average = vote_average_default
+        popularity = popularity_default
+        runtime = runtime_default
+        year = year_default
+        language = language_default
+        month = month_default
+        season = season_default
+        day_of_week = day_default
+        has_homepage = homepage_default
+        has_collection = has_collection_default
+        genre_vector_mode = "Binaire (multi-hot)"
+        selected_genres = selected_genres_default
+        selected_companies = selected_companies_default
+        selected_countries = selected_countries_default
+        genre_weights = {genre_name: 1.0 for genre_name in selected_genres}
+
+        st.info(
+            f"Film sélectionné: **{selected_movie_row['title']}** ({int(selected_movie_row['year'])}) "
+            f"— genre réel: **{selected_movie_row['first_genre']}**"
         )
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Votes", f"{int(vote_count)}")
+        m2.metric("Note", f"{vote_average:.1f}/10")
+        m3.metric("Popularité", f"{popularity:.1f}")
+        m4.metric("Durée", f"{int(runtime)} min")
+        m5.metric("Année", f"{int(year)}")
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 📊 Métriques")
+            vote_count = st.number_input(
+                "Nombre de votes", min_value=50, max_value=50000, value=vote_count_default, step=50,
+            )
+            vote_average = st.slider("Note moyenne", 0.0, 10.0, vote_average_default, 0.1)
+            popularity = st.number_input(
+                "Score de popularité", min_value=0.0, max_value=500.0, value=popularity_default, step=1.0,
+            )
+            runtime = st.slider("Durée (minutes)", 10, 300, runtime_default, 5)
+            year = st.slider("Année de sortie", 1950, 2025, year_default)
+
+        with col2:
+            st.markdown("#### 📅 Infos")
+            language = st.selectbox(
+                "Langue originale", top_languages + ["Other"],
+                index=(top_languages + ["Other"]).index(language_default),
+            )
+            month = st.selectbox("Mois de sortie", month_options, index=month_options.index(month_default))
+            season = st.selectbox("Saison", season_options, index=season_options.index(season_default))
+            day_of_week = st.selectbox("Jour de sortie", day_options, index=day_options.index(day_default))
+            has_homepage = st.selectbox(
+                "Page web officielle", homepage_options, index=homepage_options.index(homepage_default),
+            )
+            has_collection = st.checkbox("Fait partie d'une saga", value=has_collection_default)
+
+        st.markdown("---")
+
+        with st.expander("🎭 Genres associés (optionnel)"):
+            genre_vector_mode = st.radio(
+                "Mode d'encodage des genres :",
+                options=["Binaire (multi-hot)", "Pondéré"],
+                horizontal=True,
+            )
+            selected_genres = st.multiselect(
+                "Genres associés (4 genres affichés):",
+                options=list(le.classes_),
+                default=[g for g in selected_genres_default if g in set(le.classes_)],
+            )
+            genre_weights = {}
+            if genre_vector_mode == "Pondéré" and selected_genres:
+                default_weights = [1.0, 0.6, 0.3]
+                for idx, genre_name in enumerate(selected_genres):
+                    default_weight = default_weights[idx] if idx < len(default_weights) else 0.2
+                    genre_weights[genre_name] = st.slider(
+                        f"Poids — {genre_name}",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=float(default_weight),
+                        step=0.05,
+                        key=f"weight_{genre_name}",
+                    )
+            elif selected_genres:
+                genre_weights = {genre_name: 1.0 for genre_name in selected_genres}
+
+        with st.expander("🏢 Compagnies de production (optionnel)"):
+            selected_companies = st.multiselect(
+                "Sélectionnez les compagnies de production :",
+                options=top_companies,
+                default=selected_companies_default,
+            )
+
+        with st.expander("🌍 Pays de production (optionnel)"):
+            selected_countries = st.multiselect(
+                "Sélectionnez les pays de production :",
+                options=top_countries,
+                default=selected_countries_default,
+            )
 
     st.markdown("")
 
     if st.button("🎯 Prédire le genre", type="primary", use_container_width=True):
         # Construire le vecteur de features
         feature_values = {}
+
+        # En mode dataset, on force les métriques à partir du film choisi
+        # pour éviter toute divergence avec l'affichage.
+        if dataset_mode and selected_movie_row is not None:
+            vote_count = int(max(50, float(selected_movie_row.get("vote_count", vote_count_default) or vote_count_default)))
+            vote_average = float(np.clip(float(selected_movie_row.get("vote_average", vote_average_default) or vote_average_default), 0.0, 10.0))
+            popularity = float(max(0.0, float(selected_movie_row.get("popularity", popularity_default) or popularity_default)))
+            runtime = int(np.clip(float(selected_movie_row.get("runtime", runtime_default) or runtime_default), 10, 300))
+            year = int(np.clip(float(selected_movie_row.get("year", year_default) or year_default), 1950, 2025))
 
         # Numériques
         feature_values["vote_count"] = vote_count
@@ -446,6 +467,13 @@ elif page == "🎯 Prédiction":
 
         # Affichage
         st.success(f"### Genre prédit : **{predicted_genre}**")
+        if selected_movie_row is not None:
+            true_genre = str(selected_movie_row.get("first_genre", "Inconnu"))
+            is_correct = predicted_genre == true_genre
+            if is_correct:
+                st.success(f"✅ Vérification dataset : prédiction correcte (réel = **{true_genre}**).")
+            else:
+                st.warning(f"❌ Vérification dataset : réel = **{true_genre}**, prédit = **{predicted_genre}**.")
 
         # Barplot des probabilités
         prob_df = pd.DataFrame({
@@ -465,110 +493,110 @@ elif page == "🎯 Prédiction":
         fig_prob.update_layout(height=600, yaxis=dict(categoryorder="total ascending"))
         st.plotly_chart(fig_prob, use_container_width=True)
 
-        # Top 5 genres
-        top5 = prob_df.nlargest(5, "Probabilité")
-        st.markdown("**Top 5 genres les plus probables :**")
-        for _, row in top5.iterrows():
+        # Top 4 genres (les 4 classes du modèle)
+        top4 = prob_df.nlargest(4, "Probabilité")
+        st.markdown("**Probabilités (4 genres) :**")
+        for _, row in top4.iterrows():
             pct = row["Probabilité"] * 100
             st.write(f"- **{row['Genre']}** : {pct:.2f}%")
 
         # Pondération / contribution des features au score du genre prédit
-        st.markdown("### Pondération des features dans le calcul du modèle")
-        if hasattr(best_model, "feature_log_prob_") and hasattr(best_model, "class_log_prior_"):
-            x_scaled = X_model_input[0]
-            class_idx = int(prediction)
-            class_name = le.classes_[class_idx]
-            weights = best_model.feature_log_prob_[class_idx]
-            contributions = x_scaled * weights
+        with st.expander("Détails techniques (contributions)", expanded=False):
+            if hasattr(best_model, "feature_log_prob_") and hasattr(best_model, "class_log_prior_"):
+                x_scaled = X_model_input[0]
+                class_idx = int(prediction)
+                class_name = le.classes_[class_idx]
+                weights = best_model.feature_log_prob_[class_idx]
+                contributions = x_scaled * weights
 
-            contrib_df = pd.DataFrame({
-                "Feature": ALL_FEATURES,
-                "Valeur (après scaling)": x_scaled,
-                "Poids log P(feature|classe)": weights,
-                "Contribution au score": contributions,
-            })
-            contrib_df["AbsContribution"] = contrib_df["Contribution au score"].abs()
-            contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
+                contrib_df = pd.DataFrame({
+                    "Feature": ALL_FEATURES,
+                    "Valeur (après scaling)": x_scaled,
+                    "Poids log P(feature|classe)": weights,
+                    "Contribution au score": contributions,
+                })
+                contrib_df["AbsContribution"] = contrib_df["Contribution au score"].abs()
+                contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
 
-            st.caption(
-                f"Classe analysée : {class_name}. "
-                "Contribution = valeur_feature_scaled × log P(feature|classe)."
-            )
-            st.dataframe(
-                contrib_df[["Feature", "Valeur (après scaling)", "Poids log P(feature|classe)", "Contribution au score"]]
-                .head(20)
-                .style.format({
-                    "Valeur (après scaling)": "{:.4f}",
-                    "Poids log P(feature|classe)": "{:.4f}",
-                    "Contribution au score": "{:.4f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+                st.caption(
+                    f"Classe analysée : {class_name}. "
+                    "Contribution = valeur_feature_scaled × log P(feature|classe)."
+                )
+                st.dataframe(
+                    contrib_df[["Feature", "Valeur (après scaling)", "Poids log P(feature|classe)", "Contribution au score"]]
+                    .head(20)
+                    .style.format({
+                        "Valeur (après scaling)": "{:.4f}",
+                        "Poids log P(feature|classe)": "{:.4f}",
+                        "Contribution au score": "{:.4f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
-            fig_contrib = px.bar(
-                contrib_df.head(20).sort_values("Contribution au score"),
-                x="Contribution au score",
-                y="Feature",
-                orientation="h",
-                title="Top 20 contributions de features (classe prédite)",
-                color="Contribution au score",
-                color_continuous_scale="RdBu_r",
-            )
-            st.plotly_chart(fig_contrib, use_container_width=True)
-        elif hasattr(best_model, "theta_") and hasattr(best_model, "var_"):
-            x_scaled = X_model_input[0]
-            class_idx = int(prediction)
-            class_name = le.classes_[class_idx]
-            mu = best_model.theta_[class_idx]
-            var = np.maximum(best_model.var_[class_idx], 1e-12)
-            contributions = -0.5 * np.log(2 * np.pi * var) - ((x_scaled - mu) ** 2) / (2 * var)
+                fig_contrib = px.bar(
+                    contrib_df.head(20).sort_values("Contribution au score"),
+                    x="Contribution au score",
+                    y="Feature",
+                    orientation="h",
+                    title="Top 20 contributions de features (classe prédite)",
+                    color="Contribution au score",
+                    color_continuous_scale="RdBu_r",
+                )
+                st.plotly_chart(fig_contrib, use_container_width=True)
+            elif hasattr(best_model, "theta_") and hasattr(best_model, "var_"):
+                x_scaled = X_model_input[0]
+                class_idx = int(prediction)
+                class_name = le.classes_[class_idx]
+                mu = best_model.theta_[class_idx]
+                var = np.maximum(best_model.var_[class_idx], 1e-12)
+                contributions = -0.5 * np.log(2 * np.pi * var) - ((x_scaled - mu) ** 2) / (2 * var)
 
-            contrib_df = pd.DataFrame({
-                "Feature": ALL_FEATURES,
-                "Valeur (après scaling)": x_scaled,
-                "Moyenne classe (theta)": mu,
-                "Variance classe": var,
-                "Contribution log-vraisemblance": contributions,
-            })
-            contrib_df["AbsContribution"] = contrib_df["Contribution log-vraisemblance"].abs()
-            contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
+                contrib_df = pd.DataFrame({
+                    "Feature": ALL_FEATURES,
+                    "Valeur (après scaling)": x_scaled,
+                    "Moyenne classe (theta)": mu,
+                    "Variance classe": var,
+                    "Contribution log-vraisemblance": contributions,
+                })
+                contrib_df["AbsContribution"] = contrib_df["Contribution log-vraisemblance"].abs()
+                contrib_df = contrib_df.sort_values("AbsContribution", ascending=False)
 
-            st.caption(
-                f"Classe analysée : {class_name}. "
-                "Contribution = terme log-vraisemblance Gaussienne par feature."
-            )
-            st.dataframe(
-                contrib_df[[
-                    "Feature",
-                    "Valeur (après scaling)",
-                    "Moyenne classe (theta)",
-                    "Variance classe",
-                    "Contribution log-vraisemblance",
-                ]]
-                .head(20)
-                .style.format({
-                    "Valeur (après scaling)": "{:.4f}",
-                    "Moyenne classe (theta)": "{:.4f}",
-                    "Variance classe": "{:.4f}",
-                    "Contribution log-vraisemblance": "{:.4f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+                st.caption(
+                    f"Classe analysée : {class_name}. "
+                    "Contribution = terme log-vraisemblance Gaussienne par feature."
+                )
+                st.dataframe(
+                    contrib_df[[
+                        "Feature",
+                        "Valeur (après scaling)",
+                        "Moyenne classe (theta)",
+                        "Variance classe",
+                        "Contribution log-vraisemblance",
+                    ]]
+                    .head(20)
+                    .style.format({
+                        "Valeur (après scaling)": "{:.4f}",
+                        "Moyenne classe (theta)": "{:.4f}",
+                        "Variance classe": "{:.4f}",
+                        "Contribution log-vraisemblance": "{:.4f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
-            fig_contrib = px.bar(
-                contrib_df.head(20).sort_values("Contribution log-vraisemblance"),
-                x="Contribution log-vraisemblance",
-                y="Feature",
-                orientation="h",
-                title="Top 20 contributions de features (classe prédite)",
-                color="Contribution log-vraisemblance",
-                color_continuous_scale="RdBu_r",
-            )
-            st.plotly_chart(fig_contrib, use_container_width=True)
-        else:
-            st.info("Le modèle courant n'expose pas de pondérations de features interprétables.")
+                fig_contrib = px.bar(
+                    contrib_df.head(20).sort_values("Contribution log-vraisemblance"),
+                    x="Contribution log-vraisemblance",
+                    y="Feature",
+                    orientation="h",
+                    title="Top 20 contributions de features (classe prédite)",
+                    color="Contribution log-vraisemblance",
+                    color_continuous_scale="RdBu_r",
+                )
+                st.plotly_chart(fig_contrib, use_container_width=True)
+            else:
+                st.info("Le modèle courant n'expose pas de pondérations de features interprétables.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
