@@ -31,6 +31,12 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Pour un environnement complet notebook/expérimentations locales:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 Le dataset est téléchargé automatiquement au premier lancement (notebook ou Streamlit).
 
 ## Utilisation
