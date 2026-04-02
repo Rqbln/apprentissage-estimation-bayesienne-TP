@@ -31,11 +31,7 @@ st.set_page_config(
 )
 
 # ── Chargement des artefacts ──────────────────────────────────────────────────
-DEFAULT_ARTIFACT_PATH = (
-    "model_artifacts_over88.pkl"
-    if os.path.exists("model_artifacts_over88.pkl")
-    else "model_artifacts.pkl"
-)
+DEFAULT_ARTIFACT_PATH = "model_artifacts.pkl"
 ARTIFACT_PATH = os.getenv("MODEL_ARTIFACT_PATH", DEFAULT_ARTIFACT_PATH)
 
 
@@ -152,7 +148,7 @@ except Exception as e:
     st.error(f"Erreur de chargement du modèle : {e}")
     st.info(
         "Générez un artefact modèle puis relancez l'app "
-        "(par défaut `model_artifacts_over88.pkl`, sinon `model_artifacts.pkl`)."
+        "(par défaut `model_artifacts.pkl`)."
     )
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
