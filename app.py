@@ -20,8 +20,11 @@ import json
 import os
 
 # ── Configuration de la page ──────────────────────────────────────────────────
+APP_NAME = "Movie Finder"
+LOGO_PATH = "logo.png"
+
 st.set_page_config(
-    page_title="Prédiction Genre Films",
+    page_title=APP_NAME,
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -153,7 +156,9 @@ except Exception as e:
     )
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
-st.sidebar.title("🎬 Navigation")
+if os.path.exists(LOGO_PATH):
+    st.sidebar.image(LOGO_PATH, width=120)
+st.sidebar.title(f"🎬 {APP_NAME}")
 page = st.sidebar.radio(
     "Choisir une page :",
     ["🔍 Exploration des données", "🎯 Prédiction", "📊 Analyse du modèle"],
@@ -165,7 +170,7 @@ if MODEL_LOADED:
         f"""
 **Projet ECE Paris**  
 Apprentissage & Estimation Bayésienne  
-*Prédiction du genre des films IMDb*  
+*{APP_NAME} — Prédiction du genre des films IMDb*  
 
 **Modèle** : {best_model_name}  
 **Artefact** : `{ARTIFACT_PATH}`  
@@ -173,7 +178,6 @@ Apprentissage & Estimation Bayésienne
 **Accuracy** : {all_model_metrics[best_model_name]['accuracy']:.1%}
 """
     )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 1 : Exploration des données
