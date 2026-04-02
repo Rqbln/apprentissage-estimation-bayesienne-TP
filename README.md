@@ -23,6 +23,11 @@ Consultez [DOCUMENTATION_MODELE.md](DOCUMENTATION_MODELE.md) pour:
 - la logique de prédiction et d'interprétation des contributions
 - les artefacts sauvegardés et comment réentraîner
 
+Consultez aussi [DOCUMENTATION_NOTEBOOK_COMPLETE.md](DOCUMENTATION_NOTEBOOK_COMPLETE.md) pour:
+- une explication pas-à-pas de tout le process du notebook
+- le détail de l'extraction/fusion/nettoyage multi-sources
+- la chronologie des entraînements, tuning, ensembles et résultats
+
 ## Installation
 
 ```bash
@@ -50,6 +55,14 @@ streamlit run app.py
 - **Exploration** : aperçu du dataset, distributions, corrélations  
 - **Prédiction** : formulaire interactif pour prédire le genre d’un film (genres associés en mode binaire ou pondéré)  
 - **Analyse** : métriques, matrices de confusion, performance par genre  
+
+### Lancer la deuxième application Streamlit (notebook 19 genres)
+
+```bash
+streamlit run app_notebook_19genres.py
+```
+
+Cette version reprend l'UX/UI de l'app principale mais s'appuie sur le pipeline final du notebook (19 genres, ensemble optimisé, lecture Top-K).
 
 ### Réentraîner le modèle (Jupyter)
 
